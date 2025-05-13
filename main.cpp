@@ -9,7 +9,7 @@ int main(int argc, char* argv[])
 {
     // single thread processor
     // it's either processing something or it's not
-//    bool processorAvailable = true;
+    //bool processorAvailable = true;
 
     // vector of processes, processes will appear here when they are created by
     // the ProcessMgmt object (in other words, automatically at the appropriate time)
@@ -57,10 +57,13 @@ int main(int argc, char* argv[])
 
 
     time = 0;
-//    processorAvailable = true;
+
+    list<Process>::iterator here = processList.begin();
+    list<Process> readyList, blockedList;
+    bool running = false, cont = false, allFinished = false, processorAvailable = true;
 
     //keep running the loop until all processes have been added and have run to completion
-    while(processMgmt.moreProcessesComing()  /* TODO add something to keep going as long as there are processes that arent done! */ )
+    while(!allFinished)
     {
         //Update our current time step
         ++time;
@@ -77,8 +80,84 @@ int main(int argc, char* argv[])
         // - admit a new process if one is ready (i.e., take a 'newArrival' process and put them in the 'ready' state)
         // - address an interrupt if there are any pending (i.e., update the state of a blocked process whose IO operation is complete)
         // - start processing a ready process if there are any ready
+        bool admitting = false, finished = false, ioReqBlock = false, intrptDone = false;
 
+        if(!processorAvailable){
+          if(running || cont){
+            cont = true;
+            running = false;
+            here->processorTime++;
+            for(list<IOEvent>::iterator ite = here->ioEvents.begin(); ite != here->ioEvents.end(); ++ite){
+              if(here->processorTime == ite->time){//encountered io event for current process
+                here->state = blocked; 
+                blockedList.push_back(*here);
+                ioModule.submitIORequest(time, *ite, *here);
+                ioReqBlock = true;
+                processorAvailable = true;
+                cont = false;
+              } 
+            }
+            if(here->processorTime == here->reqProcessorTime){//process done
+              finished = true;
+              processorAvailable = true;
+              here->state = done;
+              here->doneTime = time;
+            }
+          }
+        }else{
+          //set newly arriving processes to ready status one at a time and adding to ready list
+          for(list<Process>::iterator here2 = processList.begin(); here2 != processList.end(); ++here2){
+            if(here2->state == newArrival){
+                here2->state = ready;
+                readyList.push_back(*here2);
+                admitting = true;
+                break;
+            }
+          }
+          //address interrupt if any pending
+          if(!interrupts.empty() && !admitting) //!interrupts.empty() for when only one process running !admitting so process don't both happen during same time step
+            for(list<Process>::iterator here2 = processList.begin(); here2 != processList.end(); ++here2)
+              if(here2->state == blocked && here2->id == interrupts.front().procID){
+                interrupts.pop_front();
+                for(list<Process>::iterator here3 = blockedList.begin(); here3 != blockedList.end(); ++here3){
+                  if(here3->id == here2->id){
+                    readyList.push_back(*here3);
+                    blockedList.erase(here3);
+                    break;
+                  }
+                }
+                intrptDone = true;
+                here2->state = ready;
+                break;
+              }
+          
+          if(!admitting && !intrptDone){//FIFO
+            here = processList.begin();
+            bool madeReady = false;
+            while(!madeReady && !readyList.empty()){
+              if(here->id == readyList.front().id){
+                here->state = processing;
+                readyList.pop_front();
+                running = true;
+                processorAvailable = false;
+                madeReady = true;
+              } else
+                ++here;
+            }
+          }
+        }
 
+        long unsigned int doneCounter = 0;//if list isn't empty check if process not on time 1
+        if(!processList.empty()){
+          for(list<Process>::iterator here2 = processList.begin(); here2 != processList.end(); ++here2){
+            if(here2->state == done)
+              doneCounter++;
+          }
+          if(doneCounter == processList.size())
+          allFinished = true;
+        }
+          
+  
         //init the stepAction, update below
         stepAction = noAct;
 
@@ -91,15 +170,21 @@ int main(int argc, char* argv[])
         //stepAction = admitNewProc;   //admit a new process into 'ready'
         //stepAction = handleInterrupt;   //handle an interrupt
         //stepAction = beginRun;   //start running a process
- 
-        
 
         //   <your code here> 
 
-      
-
-
-
+        if(admitting)
+          stepAction = admitNewProc;
+        else if(finished)
+          stepAction = complete;
+        else if(ioReqBlock)
+          stepAction = ioRequest;
+        else if(intrptDone)
+          stepAction = handleInterrupt;
+        else if(running)
+          stepAction = beginRun;
+        else if(cont)
+          stepAction = continueRun;
 
         // Leave the below alone (at least for final submission, we are counting on the output being in expected format)
         cout << setw(5) << time << "\t"; 
